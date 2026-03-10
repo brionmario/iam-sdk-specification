@@ -45,7 +45,10 @@
 12. [Platform & Language Guidelines](#12-platform--language-guidelines)
 13. [Extensibility & Customization](#13-extensibility--customization)
 14. [Compliance & Standards](#14-compliance--standards)
-15. [Glossary](#15-glossary)
+15. [Repository Setup](#15-repository-setup)
+16. [Documentation Requirements](#16-documentation-requirements)
+17. [Sample Applications](#17-sample-applications)
+18. [Glossary](#18-glossary)
 
 ---
 
@@ -70,7 +73,7 @@ It serves as a reference for:
 
 ### 2.1 Overview
 
-The WSO2 IAM SDK suite is organised into four distinct layers. Each layer builds on the one below it, inheriting its contracts and extending them with platform or framework-specific capabilities. **No layer may skip its parent** — a framework SDK must build on a Core Lib SDK, not directly on the Agnostic SDK.
+The WSO2 IAM SDK suite is organised into four distinct layers. Each layer builds on the one below it, inheriting its contracts and extending them with platform or framework-specific capabilities. **No layer may skip its immediate parent**. If a framework SDK can be built on top of a Platform SDK or Core Lib SDK, it must use that layer instead of directly inheriting from the Agnostic SDK.
 
 This layering ensures:
 - Protocol logic (OAuth2/OIDC, token management, flow orchestration) is implemented once and shared across all higher layers
@@ -163,8 +166,8 @@ graph TD
 The same four-layer model applies to every supported ecosystem. Implementors MUST follow the layer definitions in Section 2.2 and document which layer each SDK occupies.
 
 | Ecosystem | Agnostic | Platform | Core Lib | Framework Specific |
-|-----------|----------|----------|----------|--------------------|
-| **JavaScript** | JavaScript SDK | Browser SDK, Node.js SDK | React SDK, Vue SDK | Next.js SDK, Nuxt SDK, Angular SDK |
+| --------- | -------- | -------- | -------- | ------------------ |
+| **JavaScript** | JavaScript SDK | Browser SDK, Node.js SDK | React SDK, Vue SDK | Express SDK, Next.js SDK, Nuxt SDK, React Router SDK, TanStack Router SDK |
 | **Mobile — Apple** | Swift SDK | iOS SDK | SwiftUI SDK | — |
 | **Mobile — Android** | Kotlin SDK | Android SDK | Jetpack Compose SDK | — |
 | **Cross-platform Mobile** | — | iOS SDK + Android SDK *(via platform channels)* | Flutter SDK (Dart) | — |
@@ -276,7 +279,7 @@ Application        SDK               WSO2 IAM
 
 ### 4.3 Mode Configuration
 
-The mode MUST be declared at SDK initialization and cannot change at runtime. See [Section 4.2](#42-configuration-reference) for the full configuration schema.
+The mode is inferred from a minimal configuration rather than declared explicitly. Providing a small set of additional options is enough to switch modes — for example, in the React SDK, supplying a `signInPath` tells the SDK that the app has its own login page, and the mode is automatically switched to **App-Native Login** without any further configuration. See [Section 4.2](#42-app-native-mode-api-driven) for the full configuration schema.
 
 ---
 
@@ -286,19 +289,54 @@ The mode MUST be declared at SDK initialization and cannot change at runtime. Se
 
 The SDK MUST be initialized once before any operations are performed. Calling any operation before initialization MUST throw a `SDKNotInitializedException`.
 
-```
-// Initialize the SDK
-IAMClient.initialize(config: SDKConfig) -> Void
+Initialization style varies by platform — some SDKs expose a constructor-based client, others use a provider/context wrapper. A singleton pattern is NOT required; each platform SDK SHOULD follow the idioms natural to its ecosystem.
 
-// Access the initialized client (singleton)
-IAMClient.shared() -> IAMClient
+#### JavaScript / TypeScript
+
+```js
+const client = new AsgardeoJavaScriptClient({
+  baseUrl: "https://api.asgardeo.io/t/myorg",
+  clientId: "your-client-id",
+  // ...
+});
+```
+
+#### React
+
+```jsx
+<AsgardeoProvider
+  baseUrl="https://api.asgardeo.io/t/myorg"
+  clientId="your-client-id"
+>
+  <App />
+</AsgardeoProvider>
+```
+
+#### Mobile (iOS / Android)
+
+```swift
+// Swift
+let client = AsgardeoClient(config: AsgardeoConfig(
+    baseUrl: "https://api.asgardeo.io/t/myorg",
+    clientId: "your-client-id"
+))
+```
+
+```kotlin
+// Kotlin
+val client = AsgardeoClient(
+    AsgardeoConfig(
+        baseUrl = "https://api.asgardeo.io/t/myorg",
+        clientId = "your-client-id"
+    )
+)
 ```
 
 **Implementor notes:**
+
 - Initialization MUST validate the `config` object and throw `InvalidConfigurationException` on invalid or missing required fields
-- The client MUST be a singleton per application lifecycle
-- Re-initialization MUST be explicitly supported for testing and multi-tenant scenarios via `IAMClient.reset()`
-- Platform SDKs that use a provider/context pattern (e.g., React) MAY expose initialization via a component wrapper rather than a static method, but the same validation and singleton rules apply
+- Platform SDKs using a provider/context pattern (e.g., React) MUST apply the same validation rules at the provider level
+- SDKs MAY support multiple client instances (e.g., for multi-tenant scenarios or testing) unless the platform's architecture makes a managed single instance the clear convention
 
 ### 5.2 Configuration Reference
 
@@ -307,9 +345,9 @@ Each platform SDK MUST implement all required fields and SHOULD implement all op
 **Core**
 
 | Field | Type | Required | Default | Notes |
-|-------|------|----------|---------|-------|
+| ------- | ------ | ---------- | --------- | ------- |
 | `baseUrl` | String | **Yes** | — | Base URL of the WSO2 IAM server. Must be HTTPS — HTTP MUST be rejected. e.g. `https://api.asgardeo.io/t/{org_name}` |
-| `clientId` | String | **Yes** | — | OAuth2 client ID from IAM application registration |
+| `clientId` | String | Conditional | — | OAuth2 client ID. Required for **OAuth/OIDC (Redirect)** mode. |
 
 **Redirect URIs**
 
@@ -415,71 +453,25 @@ All operations MUST be mode-agnostic at the API level — the developer calls th
 
 #### Redirect Mode
 
-The SDK initiates the standard OAuth2 Authorization Code flow with PKCE. The user is redirected to the WSO2 IAM sign-in page, authenticates, and is redirected back to `afterSignInUrl` with an authorization code. The SDK exchanges the code for tokens transparently.
+The SDK initiates the standard OAuth2 Authorization Code flow with PKCE ([RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749), [RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636), [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)). The user is redirected to the WSO2 IAM sign-in page, authenticates, and is redirected back to `afterSignInUrl` with an authorization code. The SDK exchanges the code for tokens transparently.
 
 The `signIn()` method accepts an optional `SignInOptions` map of additional authorize request parameters (e.g. `prompt`, `fidp`, `loginHint`). On success it resolves with the authenticated `User` object.
 
 #### App-Native Mode
 
-App-native sign-in uses the Asgardeo Application-Native Authentication API. The SDK drives the full authentication flow over direct API calls without any browser redirect.
+App-native sign-in uses the Application-Native Authentication API. The SDK drives the full authentication flow over direct API calls without any browser redirect.
+
+**API Specification:**
+- Asgardeo: [App-Native Authentication API](https://wso2.com/asgardeo/docs/apis/restapis/app-native-authentication-api.yaml)
+- WSO2 Identity Server: [App-Native Authentication API](https://is.docs.wso2.com/en/latest/apis/restapis/app-native-authentication-api.yaml)
 
 **Initiation** — The SDK sends a standard OAuth2 authorization request to `/oauth2/authorize` with `response_mode=direct`. The server returns the first authentication step immediately in the response body rather than redirecting.
 
-**Step handling** — Each step response contains a `flowId`, `flowStatus` (`INCOMPLETE` or `FAIL_INCOMPLETE`), and a `nextStep` object describing what the user must do next. The SDK submits the user's response to `/oauth2/authn` with the `flowId` and the selected authenticator's ID and parameters.
-
-**Step types:**
-
-| `stepType` | Meaning | SDK Behaviour |
-|------------|---------|---------------|
-| `AUTHENTICATOR_PROMPT` | User must authenticate with the specified authenticator | Collect required params and submit to `/oauth2/authn` |
-| `MULTI_OPTIONS_PROMPT` | User must choose from multiple authenticators | Present options to the user; submit the selected `authenticatorId` |
-
-**Prompt types within a step:**
-
-| `promptType` | Meaning | SDK Behaviour |
-|--------------|---------|---------------|
-| `USER_PROMPT` | Collect input from the user (e.g. username, password, OTP) | Render input fields defined in `params`; submit values |
-| `INTERNAL_PROMPT` | Collect data from the client context (e.g. device info, origin) | Gather internally and submit without user interaction |
-| `REDIRECTION_PROMPT` | Redirect the user to an external IdP (e.g. Google SSO) | Use `additionalData.redirectUrl`; handle callback; submit `code` and `state` |
+**Step handling** — Each step response contains a `flowId`, `flowStatus` (`INCOMPLETE` or `FAIL_INCOMPLETE`), and a `nextStep` object describing what the user must do next. The SDK submits the user's response to `/oauth2/authn` with the `flowId` and the selected authenticator's ID and parameters. Refer to the API spec for the full schema of step types, prompt types, and authenticator identifiers.
 
 **Completion** — When `flowStatus` is `SUCCESS_COMPLETED`, the response contains an authorization `code` in `authData`. The SDK exchanges this code for tokens via the standard token endpoint.
 
-**MFA** — Multi-factor steps arrive as additional `AUTHENTICATOR_PROMPT` steps. The SDK surfaces each step to the application via the registered MFA step handler (see Section 7.1 Client Interface), allowing the application to render the appropriate UI for OTP, TOTP, passkey, or magic link steps.
-
-#### Supported Authenticators
-
-**Local**
-
-| Authenticator | Identifier | Required Params |
-|---------------|------------|-----------------|
-| Username & Password | `BasicAuthenticator` | `username`, `password` |
-
-**Social Sign-In**
-
-| Provider | Prompt Type | Notes |
-|----------|-------------|-------|
-| Google | `REDIRECTION_PROMPT` | Redirect to Google; submit `code`, `state` on callback |
-| GitHub | `REDIRECTION_PROMPT` | Redirect to GitHub; submit `code`, `state` on callback |
-| Facebook | `REDIRECTION_PROMPT` | — |
-| LinkedIn | `REDIRECTION_PROMPT` | — |
-| Apple | `REDIRECTION_PROMPT` | — |
-
-**Enterprise**
-
-| Type | Prompt Type | Notes |
-|------|-------------|-------|
-| OIDC Federation | `REDIRECTION_PROMPT` | Pass `fidp` in `signInOptions` for IdP discovery |
-| SAML 2.0 | `REDIRECTION_PROMPT` | — |
-
-**Multi-Factor**
-
-| Authenticator | Prompt Type | Required Params |
-|---------------|-------------|-----------------|
-| SMS OTP | `USER_PROMPT` | `OTPCode` |
-| Email OTP | `USER_PROMPT` | `OTPCode` |
-| TOTP | `USER_PROMPT` | `token` |
-| Passkey (FIDO2) | `INTERNAL_PROMPT` | WebAuthn ceremony; submit Base64url-encoded credential |
-| Magic Link | `USER_PROMPT` | Delivered out-of-band; user submits received token |
+**MFA** — Multi-factor steps arrive as additional authentication steps. The SDK surfaces each step to the application via the registered MFA step handler (see Section 7.1 Client Interface), allowing the application to render the appropriate UI for OTP, TOTP, passkey, or magic link steps.
 
 #### Silent Sign-In
 
@@ -503,26 +495,10 @@ App-native sign-up uses the **Flow Execution API** (`POST /api/server/v1/flow/ex
 
 **Initiation** — The SDK calls the execute endpoint with `flowType: "REGISTRATION"`. The server responds with a `flowId`, `flowStatus: "INCOMPLETE"`, and a `type` describing what the client should do next.
 
-**Step types:**
+For step types, response schemas, completion behaviour, and supported flow types, refer to the platform documentation:
 
-| Response `type` | Meaning | SDK Behaviour |
-|-----------------|---------|---------------|
-| `VIEW` | Render a form described in `data.components` | Collect user input; submit with `flowId`, `actionId` from the triggered button, and `inputs` map |
-| `REDIRECTION` | Redirect to an external URL (e.g. social sign-up) | Redirect to `data.url`; handle callback; resume with `flowId` and callback params |
-| `WEBAUTHN` | Initiate a WebAuthn ceremony | Use `data.webAuthn`; Base64url-encode the credential; submit under the key in `requiredParams` |
-| `INTERNAL_PROMPT` | Collect client context data | Inspect `data.requiredParams`; gather values (e.g. `origin`) and submit |
-
-**Completion** — When `flowStatus` is `COMPLETE`, the registration flow has finished. If auto sign-in on completion is enabled, the response includes a short-lived `userAssertion` JWT (valid ~2 seconds) in `data`. This JWT can be used alongside a session data key to authenticate the user immediately.
-
-> **Note:** Auto sign-in succeeds only when the authentication methods in the executed registration flow satisfy the authentication requirements of the application's sign-in flow.
-
-**Supported flow types via Flow Execution API:**
-
-| `flowType` | Description |
-|------------|-------------|
-| `REGISTRATION` | End-user self-registration |
-| `INVITED_USER_REGISTRATION` | Complete an admin-sent invitation |
-| `PASSWORD_RECOVERY` | Password recovery (also used for forgot-password flows) |
+- Asgardeo: [Self-Registration](https://wso2.com/asgardeo/docs/guides/flows/self-registration/)
+- WSO2 Identity Server: [Self-Registration](https://is.docs.wso2.com/en/latest/guides/flows/self-registration/)
 
 #### Social & Enterprise Sign-Up
 
@@ -1385,7 +1361,258 @@ All SDK implementations MUST comply with or support the following standards and 
 
 ---
 
-## 15. Glossary
+## 15. Repository Setup
+
+This section defines how to create and organize GitHub repositories for a new SDK ecosystem. The structure depends on whether the ecosystem supports a single unified codebase (monorepo) or requires separate native repositories per platform.
+
+---
+
+### 15.0 Philosophy
+
+The guiding question when deciding repository structure is: **can the packages share a build toolchain, dependency graph, and release pipeline?**
+
+If yes, a **monorepo** is preferred. Keeping all related packages in one repository enables atomic cross-package changes, a unified CI pipeline, and a single source of truth for shared types, tests, and tooling configuration. Packages within the monorepo are still published independently — the monorepo is an implementation convenience, not a deployment constraint.
+
+If no — typically because the packages target fundamentally different native runtimes with incompatible toolchains — **separate repositories** are required. Each repository is then owned by the team with the relevant platform expertise, follows the release conventions of its ecosystem, and publishes to its own package registry.
+
+**JavaScript / TypeScript** is the clearest case for a monorepo. Every package — from the agnostic core to React, Vue, Next.js, and Nuxt — is written in TypeScript, runs through the same build pipeline, and can share test infrastructure and lint configuration. A single `asgardeo/asgardeo-js` repository holds all of them as workspace packages.
+
+**Flutter** is the clearest case for separate repositories. A Flutter SDK depends on an iOS SDK (Swift / Xcode / Swift Package Manager) and an Android SDK (Kotlin / Gradle / Maven). These toolchains cannot coexist in a single repository in any practical sense. Each platform therefore has its own repository (`asgardeo/ios`, `asgardeo/android`, `asgardeo/flutter`), its own CI, and its own release cadence. The Flutter SDK wires them together at runtime via Platform Channels rather than at build time via source-level dependencies.
+
+> **Decision rule:** Start with a monorepo. Split into separate repositories only when the native toolchains are incompatible or when platform-specific team ownership makes a shared repository impractical.
+
+---
+
+### 15.1 JavaScript / TypeScript Ecosystem — Monorepo
+
+All JavaScript and TypeScript SDK packages live in a single monorepo managed with a package manager workspace (e.g. npm workspaces, pnpm workspaces, or Turborepo).
+
+**Repository:** [`asgardeo/javascript`](https://github.com/asgardeo/javascript)
+
+#### Existing packages
+
+| Package | Layer | Source |
+| ------- | ----- | ------ |
+| `javascript` | Agnostic | [`packages/javascript`](https://github.com/asgardeo/javascript/tree/main/packages/javascript) |
+| `browser` | Platform | [`packages/browser`](https://github.com/asgardeo/javascript/tree/main/packages/browser) |
+| `node` | Platform | [`packages/node`](https://github.com/asgardeo/javascript/tree/main/packages/node) |
+| `react` | Core Lib | [`packages/react`](https://github.com/asgardeo/javascript/tree/main/packages/react) |
+| `vue` | Core Lib | [`packages/vue`](https://github.com/asgardeo/javascript/tree/main/packages/vue) |
+| `express` | Framework Specific | [`packages/express`](https://github.com/asgardeo/javascript/tree/main/packages/express) |
+| `nextjs` | Framework Specific | [`packages/nextjs`](https://github.com/asgardeo/javascript/tree/main/packages/nextjs) |
+| `nuxt` | Framework Specific | [`packages/nuxt`](https://github.com/asgardeo/javascript/tree/main/packages/nuxt) |
+| `react-router` | Framework Specific | [`packages/react-router`](https://github.com/asgardeo/javascript/tree/main/packages/react-router) |
+| `tanstack-router` | Framework Specific | [`packages/tanstack-router`](https://github.com/asgardeo/javascript/tree/main/packages/tanstack-router) |
+
+> **Router SDKs:** `react-router` and `tanstack-router` sit at the Framework Specific layer. They build on top of the React Core Lib SDK and add router-specific concerns such as protected routes, callback route handling, and navigation guards.
+
+```
+javascript/
+├── packages/
+│   ├── javascript/           # Agnostic SDK — no platform or framework deps
+│   ├── browser/              # Platform SDK — browser-specific APIs
+│   ├── node/                 # Platform SDK — Node.js-specific APIs
+│   ├── react/                # Core Lib SDK — React hooks & context
+│   ├── vue/                  # Core Lib SDK — Vue composables & plugin
+│   ├── express/              # Framework Specific SDK — Express middleware
+│   ├── nextjs/               # Framework Specific SDK
+│   ├── nuxt/                 # Framework Specific SDK
+│   ├── react-router/         # Framework Specific SDK — React Router integration
+│   └── tanstack-router/      # Framework Specific SDK — TanStack Router integration
+├── package.json              # Workspace root
+└── ...
+```
+
+**Rules:**
+
+- Every package is independently versioned and published to npm.
+- Packages reference each other via workspace protocol (`workspace:*`), not via published versions, during development.
+- No package may skip a dependency layer (see [Section 2.6](#26-layer-rules)).
+
+---
+
+### 15.2 Multi-Platform Ecosystems — Separate Repositories
+
+When an ecosystem spans multiple native runtimes (e.g. mobile), each platform gets its own dedicated repository. A cross-platform wrapper that bridges to native code also gets its own repository.
+
+#### Flutter / Mobile Example
+
+| Repository | Contents | Layer |
+| ---------- | -------- | ----- |
+| `asgardeo/ios` | Swift SDK — native iOS implementation | Agnostic + Platform SDK |
+| `asgardeo/android` | Kotlin SDK — native Android implementation | Agnostic + Platform SDK |
+| `asgardeo/flutter` | Dart SDK — delegates to iOS/Android via Platform Channel | Core Lib SDK |
+
+**Rules:**
+
+- `asgardeo/flutter` **must not** re-implement protocol logic. It delegates OAuth2/OIDC operations to `asgardeo/ios` and `asgardeo/android` through Flutter Platform Channels.
+- Each native repository is published to its ecosystem's package registry (Swift Package Manager / CocoaPods for iOS; Maven Central / GitHub Packages for Android; pub.dev for Flutter).
+- Version alignment across the three repositories is required at every release: a Flutter SDK release must declare the minimum compatible versions of the iOS and Android SDKs it wraps.
+
+---
+
+### 15.3 Naming Convention
+
+Repository and package names SHOULD follow the conventions natural to each ecosystem.
+Ecosystem-specific package naming rules take precedence over a unified cross-language pattern.
+
+| Ecosystem               | Package / Module Name             | Convention rationale                                                                                                             |
+| ----------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| JavaScript / TypeScript | `@asgardeo/*`                     | npm scope-based packages. Multiple SDK packages can live inside a monorepo (e.g., `@asgardeo/auth-spa`, `@asgardeo/auth-react`). |
+| iOS (Swift)             | `Asgardeo`                        | Swift Package Manager libraries typically use PascalCase module names.                                                           |
+| Android (Kotlin)        | `io.asgardeo.*`                   | Java/Kotlin libraries follow reverse-domain naming for group IDs and packages (e.g., `io.asgardeo.auth`).                        |
+| Flutter (Dart)          | `asgardeo_flutter`                | Dart packages use `snake_case` with underscores separating words.                                                                |
+| Python                  | `asgardeo`                        | Python packages are typically lowercase with optional underscores if needed.                                                     |
+| Go                      | `github.com/asgardeo/asgardeo-go` | Go modules follow repository import paths rather than separate package registries.                                               |
+
+---
+
+### 15.4 Repository Checklist
+
+Every new SDK repository must include the following before the first public release:
+
+- [ ] `README.md` — installation, quick-start, and link to this specification
+- [ ] `CONTRIBUTING.md` — branching strategy, commit convention, PR process
+- [ ] `LICENSE` — Apache 2.0 (consistent with all WSO2 open-source projects)
+- [ ] `SECURITY.md` — responsible disclosure process
+- [ ] CI pipeline — lint, build, and test on every pull request
+- [ ] Release pipeline — automated publish to the appropriate package registry on tag push
+- [ ] Issue templates — bug report and feature request templates
+- [ ] Sample application(s) — at least one runnable sample per SDK demonstrating the primary use case (see [Section 17](#17-sample-applications))
+
+---
+
+## 16. Documentation Requirements
+
+Every SDK release MUST be accompanied by documentation published to both the Asgardeo and WSO2 Identity Server doc portals. Documentation is not optional — an SDK without docs MUST NOT be considered shippable.
+
+---
+
+### 16.1 Quickstart Guide
+
+Each SDK MUST have a quickstart guide that takes a developer from zero to a working sign-in flow in the shortest path possible. The quickstart MUST:
+
+- Target a specific framework or runtime (one quickstart per SDK package)
+- Cover installation, initialization, and a minimal sign-in / sign-out integration
+- Include working code snippets that can be copy-pasted directly
+- Be published to both portals under a consistent URL pattern:
+  - Asgardeo: `https://wso2.com/asgardeo/docs/quick-starts/<sdk-name>/`
+  - WSO2 IS: `https://is.docs.wso2.com/en/latest/quick-starts/<sdk-name>/`
+
+**Examples:**
+
+- Asgardeo React quickstart: [https://wso2.com/asgardeo/docs/quick-starts/react/](https://wso2.com/asgardeo/docs/quick-starts/react/)
+- WSO2 IS React quickstart: [https://is.docs.wso2.com/en/latest/quick-starts/react/](https://is.docs.wso2.com/en/latest/quick-starts/react/)
+
+---
+
+### 16.2 API Reference
+
+Each SDK MUST publish generated API reference documentation. The reference MUST cover every public method, type, and configuration option exposed by the SDK.
+
+Published references are indexed at:
+
+- Asgardeo SDK docs: [https://wso2.com/asgardeo/docs/sdks/](https://wso2.com/asgardeo/docs/sdks/)
+- WSO2 IS integrations: [https://is.docs.wso2.com/en/latest/integrations/](https://is.docs.wso2.com/en/latest/integrations/)
+
+---
+
+## 17. Sample Applications
+
+Every SDK that targets an application developer (i.e. anything at the Core Lib or Framework Specific layer) MUST include at least one runnable sample application in the repository. Samples are first-class deliverables — an SDK MUST NOT be considered shippable without them.
+
+---
+
+### 17.1 Philosophy
+
+A sample is the fastest proof that an SDK actually works end-to-end. It serves three purposes:
+
+1. **Validation** — the sample is run in CI against a real (or mock) WSO2 IAM instance, catching integration regressions before release.
+2. **Developer onboarding** — a developer can clone, configure, and run the sample in under five minutes to see the SDK working before writing a line of their own code.
+3. **Specification compliance** — the sample demonstrates the canonical happy path prescribed by this specification, not a workaround or internal shortcut.
+
+---
+
+### 17.2 Location & Structure
+
+Samples live inside the SDK repository under a top-level `samples/` directory. Each sample is a self-contained, runnable project with its own `package.json` (or equivalent) and `README.md`.
+
+```text
+<repo-root>/
+└── samples/
+    ├── b2c-react/          # React SDK — B2C login + profile
+    ├── express-protected/  # Express SDK — protected API server
+    └── <additional>/       # One directory per sample
+```
+
+**Rules:**
+
+- Each sample directory MUST be independently installable (`npm install` / equivalent) without touching workspace root dependencies.
+- Each sample MUST have its own `README.md` with: prerequisites, environment variable setup, run instructions, and a short description of what the sample demonstrates.
+- Samples MUST NOT hardcode credentials or tenant URLs. All connection details MUST be supplied via environment variables (e.g. a `.env.example` file checked in; `.env` gitignored).
+- Samples MUST use the SDK from the local workspace (via workspace protocol or relative path), not from the published registry.
+
+---
+
+### 17.3 Required Samples per SDK
+
+The table below lists the minimum required sample for each SDK. Additional samples (e.g. B2B, MFA, organization switching) are encouraged but not mandatory for the first release.
+
+| SDK | Sample name | What it demonstrates |
+| --- | ----------- | -------------------- |
+| **React SDK** | `b2c-react` | B2C single-page app: sign-in with redirect, display authenticated user's profile (name, email, avatar), sign-out. Includes a protected route that redirects unauthenticated users to sign-in. |
+| **Vue SDK** | `b2c-vue` | Same scope as `b2c-react`, implemented with Vue 3 and the Vue SDK composable. |
+| **Next.js SDK** | `b2c-nextjs` | B2C app using the App Router: a public home page, a sign-in flow, and a protected `/profile` server component that reads the session server-side. |
+| **Nuxt SDK** | `b2c-nuxt` | B2C app equivalent to `b2c-nextjs`, implemented with Nuxt 3. |
+| **Angular SDK** | `b2c-angular` | B2C single-page app with Angular routing: sign-in, profile page guarded by `AuthGuard`, sign-out. |
+| **Express SDK** | `express-protected` | Minimal Express server with two routes: a public `/health` endpoint and a protected `/api/me` endpoint that returns the authenticated user's claims. Requests without a valid bearer token receive `401`. |
+| **Node.js SDK** | `node-protected` | Same as `express-protected` but using the Node.js SDK directly (no Express), demonstrating SDK use in a plain HTTP server or serverless handler. |
+| **React Router SDK** | `b2c-react-router` | B2C app with React Router v7: public and protected routes, callback route, and user profile page. |
+| **TanStack Router SDK** | `b2c-tanstack-router` | B2C app with TanStack Router: same scope as `b2c-react-router`. |
+| **iOS SDK** | `b2c-ios` | Native iOS app (SwiftUI): sign-in sheet, user profile view showing claims, sign-out. |
+| **Android SDK** | `b2c-android` | Native Android app (Jetpack Compose): sign-in screen, profile screen, sign-out. |
+| **Flutter SDK** | `b2c-flutter` | Cross-platform Flutter app: sign-in, user profile screen, sign-out, running on iOS and Android. |
+| **Python / Django SDK** | `django-protected` | Django app with a public index view and a protected `/profile` view that requires an active session. |
+| **Python / FastAPI SDK** | `fastapi-protected` | FastAPI app with a public root endpoint and a protected `/me` endpoint secured with a bearer token dependency. |
+
+---
+
+### 17.4 Sample Quality Standards
+
+Every sample MUST meet the following minimum bar before the SDK is considered shippable:
+
+- [ ] Runs successfully against a live WSO2 Asgardeo trial organization or a local WSO2 Identity Server instance using only the `.env.example` variables.
+- [ ] Demonstrates the happy path without requiring any code changes — only environment variable configuration.
+- [ ] Uses the public SDK API exclusively. No internal imports, no monkey-patching, no workarounds.
+- [ ] Has no known security issues: no hardcoded secrets, no `dangerouslyAllowBrowser`-style flags enabled in production code, no disabled PKCE or token validation.
+- [ ] CI runs the sample build (and, where practical, a headless integration test) on every pull request.
+
+---
+
+### 17.5 B2C Reference Flow (Minimum Viable Sample)
+
+The following flow defines the minimum a B2C sample MUST demonstrate. Framework-specific samples may expand on this but MUST NOT do less.
+
+```text
+1. User visits the app — unauthenticated state is shown (e.g. "Sign In" button or redirect to sign-in page)
+2. User clicks sign-in → SDK initiates the authentication flow
+3. User completes sign-in at the WSO2 IAM login page
+4. User is redirected back to the app — authenticated state is shown
+5. App displays: display name, email address, and profile picture (or initials fallback)
+6. User clicks sign-out → session is terminated, user returns to unauthenticated state
+```
+
+For server-side SDKs (Express, Node.js, Django, FastAPI), replace steps 1–6 with:
+
+```text
+1. Client sends GET /public → 200 OK (no auth required)
+2. Client sends GET /protected without token → 401 Unauthorized
+3. Client sends GET /protected with valid Bearer token → 200 OK with user claims JSON
+```
+
+---
+
+## 18. Glossary
 
 | Term | Definition |
 |------|------------|
