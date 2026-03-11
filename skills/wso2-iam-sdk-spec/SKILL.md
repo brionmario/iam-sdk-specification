@@ -586,6 +586,53 @@ The full spec has 18 sections. When extending or reviewing, use these as anchors
 7. Define the required sample in Section 17.3
 8. Add quickstart guide and API reference to Section 16
 
+### Implementing a mobile SDK (iOS / Android / Flutter)
+
+Three separate repos, co-located in a `mobile-sdks/` workspace alongside a
+`docs-is/` checkout:
+
+| Repo | Package | Layer | Min versions |
+|------|---------|-------|--------------|
+| `ios-sdk` | SPM: `Asgardeo` | Agnostic + Platform | iOS 15.0, Swift 5.9+ |
+| `android-sdk` | Maven: `io.asgardeo.android` | Agnostic + Platform | SDK 24, Kotlin 1.9+ |
+| `flutter-sdk` | pub.dev: `asgardeo_flutter` | Core Lib | Flutter 3.16+, Dart 3.2+ |
+
+Flutter bridges via `MethodChannel("io.asgardeo.flutter/sdk")` and
+`EventChannel("io.asgardeo.flutter/events")`. It must NOT re-implement
+protocol logic.
+
+Implementation phases (in order):
+0. Repo scaffolding + `docs-is` checkout
+1. Models & configuration
+2. Adapters & utilities (StorageAdapter, LoggerAdapter, HTTPAdapter, EventEmitter)
+3. OIDC discovery & PKCE
+4. Token management
+5. Platform auth handlers (Keychain/EncryptedPrefs, ASWebAuthSession/ChromeTabs)
+6. App-native authentication
+7. AsgardeoClient assembly (all 19 methods + 3 properties)
+8. SwiftUI / Jetpack Compose integration
+9. Flutter platform channel bridge
+10. Flutter UI widgets
+11. Sample applications
+12. Documentation & release prep
+
+### Contributing documentation to docs-is
+
+All SDK docs (quickstarts, API reference) live in `wso2/docs-is` and are
+submitted as a PR. File locations:
+
+- Quickstart: `en/includes/quick-starts/<sdk-name>.md`
+- API reference: `en/includes/sdks/<sdk-name>/`
+- Nav entries: added to **both** `en/asgardeo/mkdocs.yml` and
+  `en/identity-server/next/mkdocs.yml`
+
+Nav placement:
+- Quickstart → `Get started > Connect App > <SDK name>`
+- API reference → `SDK Documentation > <SDK name>`
+
+Follow the React SDK as the reference pattern:
+`en/includes/quick-starts/react.md` and `en/includes/sdks/react/`.
+
 ### Adding a new authenticator
 
 1. Add to the authenticator tables in Section 6.1 (sign-in) with prompt type

@@ -717,7 +717,7 @@ const {
   signIn,
   signOut,
   signUp,
-  isAuthenticated,
+  isSignedIn,
   isLoading,
   user,
   getUserProfile,
@@ -746,14 +746,14 @@ export class MyComponent {
 **Vue — Single composable:**
 ```typescript
 // ✅ ONE composable
-const { signIn, signOut, isAuthenticated, user } = useAsgardeo()
+const { signIn, signOut, isSignedIn, user } = useAsgardeo()
 ```
 
 **What the single entry point MUST expose:**
 
 | Category | Methods / Properties |
 |----------|---------------------|
-| Authentication state | `isAuthenticated`, `isLoading`, `user` |
+| Authentication state | `isSignedIn`, `isLoading`, `user` |
 | Auth actions | `signIn()`, `signOut()`, `signInSilently()` |
 | Registration | `signUp()` |
 | Token | `getAccessToken()`, `exchangeToken()` |
@@ -1377,7 +1377,7 @@ If no — typically because the packages target fundamentally different native r
 
 **JavaScript / TypeScript** is the clearest case for a monorepo. Every package — from the agnostic core to React, Vue, Next.js, and Nuxt — is written in TypeScript, runs through the same build pipeline, and can share test infrastructure and lint configuration. A single `asgardeo/asgardeo-js` repository holds all of them as workspace packages.
 
-**Flutter** is the clearest case for separate repositories. A Flutter SDK depends on an iOS SDK (Swift / Xcode / Swift Package Manager) and an Android SDK (Kotlin / Gradle / Maven). These toolchains cannot coexist in a single repository in any practical sense. Each platform therefore has its own repository (`asgardeo/ios`, `asgardeo/android`, `asgardeo/flutter`), its own CI, and its own release cadence. The Flutter SDK wires them together at runtime via Platform Channels rather than at build time via source-level dependencies.
+**Flutter** is the clearest case for separate repositories. A Flutter SDK depends on an iOS SDK (Swift / Xcode / Swift Package Manager) and an Android SDK (Kotlin / Gradle / Maven). These toolchains cannot coexist in a single repository in any practical sense. Each platform therefore has its own repository (`ios-sdk`, `android-sdk`, `flutter-sdk`), its own CI, and its own release cadence. The Flutter SDK wires them together at runtime via Platform Channels rather than at build time via source-level dependencies.
 
 > **Decision rule:** Start with a monorepo. Split into separate repositories only when the native toolchains are incompatible or when platform-specific team ownership makes a shared repository impractical.
 
@@ -1435,18 +1435,22 @@ javascript/
 
 When an ecosystem spans multiple native runtimes (e.g. mobile), each platform gets its own dedicated repository. A cross-platform wrapper that bridges to native code also gets its own repository.
 
-#### Flutter / Mobile Example
+#### Flutter / Mobile
 
-| Repository | Contents | Layer |
-| ---------- | -------- | ----- |
-| `asgardeo/ios` | Swift SDK — native iOS implementation | Agnostic + Platform SDK |
-| `asgardeo/android` | Kotlin SDK — native Android implementation | Agnostic + Platform SDK |
-| `asgardeo/flutter` | Dart SDK — delegates to iOS/Android via Platform Channel | Core Lib SDK |
+| Repository | Package name | Layer | Min versions |
+| ---------- | ------------ | ----- | ------------ |
+| `ios-sdk` | SPM: `Asgardeo` | Agnostic + Platform SDK | iOS 15.0, Swift 5.9+ |
+| `android-sdk` | Maven: `io.asgardeo.android` | Agnostic + Platform SDK | SDK 24, Kotlin 1.9+, compileSdk 34 |
+| `flutter-sdk` | pub.dev: `asgardeo_flutter` | Core Lib SDK | Flutter 3.16+, Dart 3.2+ |
+
+All three repositories live side-by-side in a single local workspace folder (`mobile-sdks/`) for convenience. The workspace folder is not itself a repository — each SDK is cloned independently and has its own CI, release cadence, and version history.
+
+The `docs-is` repository (`wso2/docs-is`) is also checked out into the same workspace to enable local documentation preview and to author the SDK quickstart and API reference pages as a pull request.
 
 **Rules:**
 
-- `asgardeo/flutter` **must not** re-implement protocol logic. It delegates OAuth2/OIDC operations to `asgardeo/ios` and `asgardeo/android` through Flutter Platform Channels.
-- Each native repository is published to its ecosystem's package registry (Swift Package Manager / CocoaPods for iOS; Maven Central / GitHub Packages for Android; pub.dev for Flutter).
+- `flutter-sdk` **must not** re-implement protocol logic. It delegates OAuth2/OIDC operations to `ios-sdk` and `android-sdk` via `MethodChannel("io.asgardeo.flutter/sdk")` and receives events via `EventChannel("io.asgardeo.flutter/events")`.
+- Each native repository is published to its ecosystem's package registry (Swift Package Manager for iOS; Maven Central / GitHub Packages for Android; pub.dev for Flutter).
 - Version alignment across the three repositories is required at every release: a Flutter SDK release must declare the minimum compatible versions of the iOS and Android SDKs it wraps.
 
 ---
@@ -1488,6 +1492,29 @@ Every SDK release MUST be accompanied by documentation published to both the Asg
 
 ---
 
+### 16.0 docs-is Repository
+
+All SDK documentation — quickstart guides, complete guides, and API reference — is authored and maintained in the [`wso2/docs-is`](https://github.com/wso2/docs-is) repository. Contributions are submitted as pull requests to that repository. The documentation is then automatically published to both the Asgardeo and WSO2 IS portals.
+
+**Workspace setup:** Check out `wso2/docs-is` alongside the SDK repositories in the local workspace. This allows local documentation preview while developing the SDK.
+
+**File locations within `wso2/docs-is`:**
+
+```text
+en/
+├── asgardeo/mkdocs.yml              # Nav for Asgardeo portal — add SDK nav entries here
+├── identity-server/next/mkdocs.yml  # Nav for WSO2 IS portal — add the same nav entries here
+└── includes/                        # Shared content included by both portals
+    ├── quick-starts/
+    │   └── <sdk-name>.md            # One file per SDK quickstart
+    └── sdks/
+        └── <sdk-name>/              # API reference directory per SDK
+```
+
+Nav entries MUST be added to **both** `mkdocs.yml` files simultaneously so documentation is always in sync across portals.
+
+---
+
 ### 16.1 Quickstart Guide
 
 Each SDK MUST have a quickstart guide that takes a developer from zero to a working sign-in flow in the shortest path possible. The quickstart MUST:
@@ -1495,9 +1522,18 @@ Each SDK MUST have a quickstart guide that takes a developer from zero to a work
 - Target a specific framework or runtime (one quickstart per SDK package)
 - Cover installation, initialization, and a minimal sign-in / sign-out integration
 - Include working code snippets that can be copy-pasted directly
+- Be authored as `en/includes/quick-starts/<sdk-name>.md` in `wso2/docs-is`
 - Be published to both portals under a consistent URL pattern:
   - Asgardeo: `https://wso2.com/asgardeo/docs/quick-starts/<sdk-name>/`
   - WSO2 IS: `https://is.docs.wso2.com/en/latest/quick-starts/<sdk-name>/`
+
+Nav entry pattern (added to both `mkdocs.yml` files under `Get started > Connect App`):
+
+```yaml
+- <SDK display name>:
+    - Quickstart: quick-starts/<sdk-name>.md
+    - Complete Guide: complete-guides/<sdk-name>/introduction.md
+```
 
 **Examples:**
 
@@ -1509,6 +1545,32 @@ Each SDK MUST have a quickstart guide that takes a developer from zero to a work
 ### 16.2 API Reference
 
 Each SDK MUST publish generated API reference documentation. The reference MUST cover every public method, type, and configuration option exposed by the SDK.
+
+API reference pages are authored under `en/includes/sdks/<sdk-name>/` in `wso2/docs-is` and indexed into both portals. The directory structure mirrors the public API surface:
+
+```text
+sdks/<sdk-name>/
+├── overview.md
+├── client.md           # IAMClient — all methods and properties
+├── configuration.md    # Config fields
+├── models.md           # Public types (User, Organization, TokenResponse, etc.)
+└── guides/
+    ├── redirect-auth.md
+    ├── app-native-auth.md
+    └── token-management.md
+```
+
+Nav entry pattern (added to both `mkdocs.yml` files under `SDK Documentation`):
+
+```yaml
+- <SDK display name>:
+    - Overview: sdks/<sdk-name>/overview.md
+    - APIs:
+        - <ClassName>: sdks/<sdk-name>/client.md
+        ...
+    - Guides:
+        - ...: sdks/<sdk-name>/guides/...
+```
 
 Published references are indexed at:
 
